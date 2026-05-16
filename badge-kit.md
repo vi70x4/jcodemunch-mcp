@@ -1,6 +1,6 @@
 # Show Your Green Impact
 
-You bought jCodeMunch-MCP. Every token your team prevents from being processed shows up in our public counter. If you want, you can show that impact on your own site, your README, your sustainability report, or your email signature, using a free embed kit we put together.
+Every token your team prevents from being processed shows up in our public counter. If you want, you can show that impact on your own site, your README, your sustainability report, or your email signature, using a free embed kit we put together.
 
 This page tells you how.
 
