@@ -1189,6 +1189,45 @@ Logging is **off by default** (`JCODEMUNCH_DEBUG=0`). Remove the export from you
 
 ---
 
+## Treating tool-returned summaries as untrusted (IPI defense)
+
+Several jcodemunch tools return one-line `summary` fields for symbols and
+files. By default, those summaries are extracted from the symbol's docstring
+when one is present, falling back to AI summarization or a deterministic
+signature shape when not. Docstrings live in source code that the indexed
+repo's authors control — which is fine for first-party code, but is a
+classic indirect-prompt-injection (IPI) surface when the same machine has
+indexed third-party dependencies, customer code, demo repos, or anything
+else whose docstrings are not under your team's review.
+
+The host agent's tool-output handling is the right layer for IPI mitigation
+in general. Anthropic's MCP guidance and the OWASP LLM Top 10 (LLM01) both
+treat tool output as untrusted by default for this reason. The agent should
+not literally execute or follow instructions found inside a returned
+`summary` string just because it looks authoritative.
+
+For deployments that want to close the channel entirely, set:
+
+```jsonc
+// ~/.code-index/config.jsonc
+{
+  "summarize_from_docstrings": false
+}
+```
+
+This disables the Tier 1 docstring-extraction summarizer. Summaries fall
+through to Tier 2 (AI summary, if configured) and Tier 3 (deterministic
+signature-shape fallback). Neither of those tiers reads docstring content
+directly into the summary string the agent sees.
+
+The trade-off is summary quality: docstring-derived summaries are often
+the most informative single line a deployment can get for free. Disabling
+them means giving up that quality for the IPI defense. Recommended for
+managed-endpoint deployments that index third-party code; optional for
+first-party-only deployments.
+
+---
+
 ## Alternative: System Prompt Routing (tweakcc)
 
 For the strongest enforcement without runtime hooks, you can patch Claude's system prompts directly using [tweakcc](https://github.com/Piebald-AI/tweakcc). This embeds jCodemunch preferences into the core tool descriptions Claude reads at startup, so the model internalizes the preference rather than relying on per-repo instructions or hook triggers.

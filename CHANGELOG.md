@@ -2,6 +2,156 @@
 
 All notable changes to jcodemunch-mcp are documented here.
 
+## [1.108.22] - 2026-05-22 - keyring credentials, metadata-only cache, init --minimal, docstring opt-out, git-SHA verification, sigstore release signing
+
+Six additive enterprise-hardening items in one release. All purely
+additive; existing user-facing behavior unchanged across every change.
+
+### Keyring credential resolution (P1.3)
+
+New optional extra `jcodemunch-mcp[keyring]` pulls the `keyring` package
+(>=24). Any credential env var the server recognises can be set to
+`"keyring:<name>"`, and at startup the server resolves that value to the
+secret stored under `<name>` in the system keyring (macOS Keychain /
+Windows Credential Manager / freedesktop Secret Service). Downstream code
+that reads `os.environ.get(...)` sees the resolved value with no per-tool
+changes required.
+
+Recognised env vars: `GITHUB_TOKEN`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`,
+`OPENAI_API_KEY`, `OPENAI_API_BASE`, `MINIMAX_API_KEY`, `ZHIPUAI_API_KEY`,
+`OPENROUTER_API_KEY`, `GROQ_API_KEY`, `JCODEMUNCH_HTTP_TOKEN`.
+
+New CLI subcommand `jcodemunch-mcp keyring set|get|delete|list` for
+managing entries. `jcodemunch-mcp config --check` output gains a "Keyring
+resolution" section listing which env vars were resolved from the keyring
+this session, so operators can verify the chokepoint is firing without
+inspecting actual secret values.
+
+Fail-closed semantics: missing keyring entries or unavailable backends
+leave env vars at the literal `keyring:<name>` string rather than empty,
+so downstream HTTP calls fail with "invalid token" instead of silently
+sending unauthenticated requests.
+
+8 new regression tests in `tests/test_credentials.py` cover the resolver,
+the fail-closed cases, and the canonical env-var surface.
+
+### Metadata-only cache mode (P1.4)
+
+New config key `cache_mode: "full" | "metadata_only"` (default `"full"`,
+no behavior change for existing installs). When set to `metadata_only`,
+the SQLite symbol table is still written normally, but source bodies are
+not persisted to disk — the `bodies/` directory under
+`~/.code-index/<repo>/` stays empty.
+
+`get_symbol_source` and `get_file_content` return a structured
+`metadata_only_mode` error when invoked under this mode; every other tool
+(search_symbols, get_file_outline, find_references, get_dependency_graph,
+etc.) works normally because none of them need bodies.
+
+Recommended for managed-endpoint deployments where policy disallows a
+second on-disk copy of source (Time Machine / iCloud / OneDrive sync that
+the canonical clone is excluded from).
+
+4 new regression tests in `tests/test_cache_mode.py` cover the body-write
+gate and the upgrade-preservation invariant.
+
+### `init --minimal` flag (P1.7)
+
+New `--minimal` flag on both `jcodemunch-mcp init` and
+`jcodemunch-mcp install <agent>`. When set, writes only the MCP server
+registration for the targeted client and skips every other channel:
+
+- No CLAUDE.md policy paste.
+- No Cursor / Windsurf rules.
+- No AGENTS.md.
+- No worktree hooks or enforcement hooks.
+- No .github/hooks (Copilot).
+- No indexing or audit step.
+
+Recommended for hardened install templates that don't want jcodemunch
+touching agent-policy files outside their existing source-controlled
+posture. Aggregate breadth concern from F-08 is addressed by giving the
+template a narrow scope rather than prohibiting `init` outright.
+
+3 new regression tests in `tests/test_init_minimal.py` lock the contract
+that no channel-writing helper fires under `--minimal`.
+
+### Docstring summarizer opt-out (P1.5)
+
+New config key `summarize_from_docstrings: bool` (default `true`).
+Controls the Tier 1 summarizer (docstring-first-sentence extraction).
+When `false`, Tier 1 is skipped entirely; summaries fall through to Tier 2
+(AI summary, if configured) and Tier 3 (deterministic signature-shape
+fallback). Neither of those tiers reads docstring content directly into
+the summary string an agent sees in metadata position.
+
+Recommended for security-conscious deployments that want to close the
+indirect-prompt-injection (IPI) channel docstring-derived summaries
+introduce when the same machine has indexed third-party / customer /
+demo repositories whose docstrings are not under the team's review. The
+host agent's tool-output handling remains the primary IPI control; this
+flag is a defense-in-depth measure.
+
+IPI mitigation guidance added to `AGENT_HOOKS.md`. Per-response
+`_source` attribution field on summary objects is deferred to a follow-up
+release pending a SQLite schema migration that persists the attribution
+durably across indexing sessions; the opt-out lever ships now because
+it's the substantive control.
+
+5 new regression tests in `tests/test_summarize_from_docstrings.py`
+cover the gate semantics.
+
+### Externally-attested cache verification (P1.6)
+
+New `verify_against` parameter on `get_symbol_source`, accepting
+`"cache"` (default, self-referential hash check, unchanged from prior
+behavior) or `"git_sha"`. When `"git_sha"`, the tool compares the cached
+source against the working-tree git HEAD slice of the same file and
+returns one of `git_sha_match`, `git_sha_mismatch`, or
+`git_unavailable` in a new `git_sha_verification` field.
+
+This addresses F-09: the default mode is self-referential and only
+catches incoherent tamper of `~/.code-index/<repo>/`; the new mode is
+externally attested and catches divergence between the cache and the
+upstream source. Available alongside the existing cache-only mode, not as
+a replacement.
+
+`SECURITY.md` updated with the verification-mode documentation.
+
+6 new regression tests in `tests/test_git_sha_verification.py` cover the
+match / mismatch / unavailable / out-of-bounds branches against a real
+ephemeral git repo. Skipped on environments without `git` on PATH.
+
+### Sigstore release signing (P1.8)
+
+New GitHub Actions workflow (`.github/workflows/sign-release.yml`) signs
+the wheel + sdist attached to a GitHub Release with `sigstore-python`
+and uploads the `.sigstore` bundles back to the release as additional
+assets. Triggered on `release.published` so the maintainer's existing
+`gh release create` flow gains forward-only signature coverage with no
+upload pattern change.
+
+Trust shape: GitHub Actions OIDC identity for the workflow file in this
+repo signs to Sigstore's public-good transparency log. Verification ties
+each artifact back to the workflow that signed it. Same shape PyPI's
+PEP 740 attestation pipeline uses, layered on top of the existing
+GitHub-release distribution channel.
+
+`SECURITY.md` documents the verification recipe for downstream
+consumers. Forward-only — releases prior to this change don't carry
+signatures and aren't going to be retroactively re-signed.
+
+### Tests
+
+```
+tests/test_credentials.py                  8 passed
+tests/test_cache_mode.py                   4 passed
+tests/test_init_minimal.py                 3 passed
+tests/test_summarize_from_docstrings.py    5 passed
+tests/test_git_sha_verification.py         6 passed (skipped without git)
+full suite                              4400+ passed
+```
+
 ## [1.108.21] - 2026-05-22 - explicit telemetry opt-out lever, speedreview Action pinned, docs hardening
 
 Patch release covering three additive enterprise-hardening items.

@@ -1132,6 +1132,12 @@ def _build_tools_list() -> list[Tool]:
                         "description": "Verify content hash matches stored hash (detects source drift)",
                         "default": False
                     },
+                    "verify_against": {
+                        "type": "string",
+                        "enum": ["cache", "git_sha"],
+                        "description": "Where to source the comparison target when verify=True. 'cache' (default) compares against the content_hash stored in the index — self-referential, only catches incoherent tamper of ~/.code-index/. 'git_sha' additionally compares the cached source against the file slice at the working-tree git HEAD — externally attested, catches divergence between the cache and the upstream source. Adds a git_sha_verification field to the response.",
+                        "default": "cache"
+                    },
                     "context_lines": {
                         "type": "integer",
                         "description": "Number of lines before/after symbol to include for context",
@@ -3879,6 +3885,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     symbol_id=arguments.get("symbol_id"),
                     symbol_ids=arguments.get("symbol_ids"),
                     verify=arguments.get("verify", False),
+                    verify_against=arguments.get("verify_against", "cache"),
                     context_lines=arguments.get("context_lines", 0),
                     storage_path=storage_path,
                     fqn=arguments.get("fqn"),
@@ -5915,7 +5922,13 @@ def _run_config(check: bool = False, init: bool = False, upgrade: bool = False) 
         row("host", _cfg.get("host", "127.0.0.1"), _detect_source("host", "127.0.0.1"))
         row("port", _cfg.get("port", 8901), _detect_source("port", 8901))
         token = os.environ.get("JCODEMUNCH_HTTP_TOKEN", "")
-        row("JCODEMUNCH_HTTP_TOKEN", green("set") if token else yellow("not set"), "env")
+        try:
+            from . import credentials as _creds
+            _kr_source = _creds.get_keyring_source_for("JCODEMUNCH_HTTP_TOKEN")
+        except Exception:
+            _kr_source = None
+        _kr_label = f"keyring:{_kr_source}" if _kr_source else "env"
+        row("JCODEMUNCH_HTTP_TOKEN", green("set") if token else yellow("not set"), _kr_label)
         rate = _cfg.get("rate_limit", 0)
         rate_label = f"{rate}/min per IP" if rate != 0 else "disabled"
         row("rate_limit", rate_label, _detect_source("rate_limit", 0))
@@ -5943,6 +5956,24 @@ def _run_config(check: bool = False, init: bool = False, upgrade: bool = False) 
     share = _cfg.get("share_savings", True)
     row("share_savings", green("enabled") if share else yellow("disabled"), _detect_source("share_savings", True))
     row("summarizer_concurrency", _cfg.get("summarizer_concurrency", 4), _detect_source("summarizer_concurrency", 4))
+
+    # ── Keyring resolution (P1.3) ─────────────────────────────────────────
+    # Surfaces which credential env vars were resolved from the system keyring
+    # at startup. Helps an operator confirm the chokepoint is firing without
+    # having to inspect the actual secret value.
+    try:
+        from . import credentials as _creds
+        _resolved = [
+            (var, _creds.get_keyring_source_for(var))
+            for var in _creds.list_recognised_env_vars()
+            if _creds.get_keyring_source_for(var) is not None
+        ]
+        if _resolved:
+            section("Keyring resolution")
+            for var, entry in _resolved:
+                row(var, green("resolved"), f"keyring:{entry}")
+    except Exception:
+        pass  # keyring not installed, env vars not touched — nothing to show
 
     # ── --check ───────────────────────────────────────────────────────────
     if check:
@@ -6493,6 +6524,17 @@ def main(argv: Optional[list[str]] = None):
         dest="share_savings",
         help="Shorthand for --share-savings=off.",
     )
+    init_parser.add_argument(
+        "--minimal",
+        action="store_true",
+        dest="minimal",
+        help=(
+            "Write only the MCP server registration; skip every other channel "
+            "(CLAUDE.md policy paste, Cursor/Windsurf rules, AGENTS.md, hooks, "
+            ".github/hooks, indexing, audit). Recommended for hardened install "
+            "templates that don't want jcodemunch touching agent-policy files."
+        ),
+    )
 
     # --- install (per-agent sugar over init) ---
     install_parser = subparsers.add_parser(
@@ -6557,6 +6599,15 @@ def main(argv: Optional[list[str]] = None):
         const="off",
         dest="share_savings",
         help="Shorthand for --share-savings=off.",
+    )
+    install_parser.add_argument(
+        "--minimal",
+        action="store_true",
+        dest="minimal",
+        help=(
+            "Write only the MCP server registration; skip CLAUDE.md, rules, "
+            "AGENTS.md, hooks, .github/hooks, indexing, audit."
+        ),
     )
 
     # --- install-status (top-level read-only inspector) ---
@@ -6856,6 +6907,21 @@ def main(argv: Optional[list[str]] = None):
         help="Print watch-all service state + per-repo reindex status",
     ))
 
+    # --- keyring (P1.3) ---
+    keyring_parser = subparsers.add_parser(
+        "keyring",
+        help="Manage credentials in the system keyring (macOS Keychain / Windows Credential Manager / freedesktop Secret Service). Requires the [keyring] extra.",
+    )
+    keyring_sub = keyring_parser.add_subparsers(dest="keyring_action")
+    keyring_set_p = keyring_sub.add_parser("set", help="Store a credential. Prompts for the value via getpass.")
+    keyring_set_p.add_argument("name", help="Env-var name the credential maps to (e.g. ANTHROPIC_API_KEY)")
+    keyring_set_p.add_argument("--from-env", action="store_true", help="Read the value from the current env var instead of prompting.")
+    keyring_get_p = keyring_sub.add_parser("get", help="Print a stored credential to stdout (sensitive — pipe with care).")
+    keyring_get_p.add_argument("name", help="Env-var name the credential maps to")
+    keyring_del_p = keyring_sub.add_parser("delete", help="Remove a stored credential.")
+    keyring_del_p.add_argument("name", help="Env-var name the credential maps to")
+    keyring_sub.add_parser("list", help="List the credential env-var names jcodemunch recognises for keyring lookup.")
+
     # --- download-model ---
     dm_parser = subparsers.add_parser(
         "download-model",
@@ -6906,7 +6972,7 @@ def main(argv: Optional[list[str]] = None):
     if any(arg in top_level_flags for arg in raw_argv):
         args = parser.parse_args(raw_argv)
     else:
-        known_commands = {"serve", "watch", "hook-event", "hook-pretooluse", "hook-posttooluse", "hook-copilot-posttooluse", "hook-precompact", "hook-taskcomplete", "hook-subagent-start", "watch-claude", "watch-all", "watch-install", "watch-uninstall", "watch-status", "config", "index", "index-file", "import-trace", "claude-md", "init", "install", "install-status", "uninstall", "install-pack", "download-model", "upgrade", "whatsnew", "receipt", "digest", "health", "file-risk", "observatory"}
+        known_commands = {"serve", "watch", "hook-event", "hook-pretooluse", "hook-posttooluse", "hook-copilot-posttooluse", "hook-precompact", "hook-taskcomplete", "hook-subagent-start", "watch-claude", "watch-all", "watch-install", "watch-uninstall", "watch-status", "config", "index", "index-file", "import-trace", "claude-md", "init", "install", "install-status", "uninstall", "install-pack", "download-model", "upgrade", "whatsnew", "receipt", "digest", "health", "file-risk", "observatory", "keyring"}
         # MCP-tool-name typos: route to the right CLI verb with a friendly hint.
         # `index_repo` and `index_folder` are MCP tools, not CLI subcommands.
         _CLI_ALIASES = {
@@ -6931,6 +6997,19 @@ def main(argv: Optional[list[str]] = None):
         if not has_subcommand:
             raw_argv = ["serve"] + list(raw_argv)
         args = parser.parse_args(raw_argv)
+
+    # P1.3 keyring resolution: rewrite any `keyring:NAME` env-var values to
+    # the actual secret stored under that name in the system keyring. Runs
+    # before any subcommand dispatch so all downstream code that calls
+    # os.environ.get("ANTHROPIC_API_KEY") etc. sees the resolved value.
+    # Skipped for the `keyring` subcommand itself (no point resolving env
+    # vars when the user is about to manage them).
+    if getattr(args, "command", None) != "keyring":
+        try:
+            from . import credentials as _creds
+            _creds.resolve_credentials_in_env()
+        except Exception:
+            logger.debug("credential env resolution skipped", exc_info=True)
 
     if args.command == "config":
         _run_config(
@@ -6961,6 +7040,7 @@ def main(argv: Optional[list[str]] = None):
             yes=args.yes,
             no_backup=args.no_backup,
             share_savings=getattr(args, "share_savings", None),
+            minimal=getattr(args, "minimal", False),
         ))
 
     if args.command == "install":
@@ -7007,6 +7087,7 @@ def main(argv: Optional[list[str]] = None):
             skills=getattr(args, "skills", False),
             skills_scope=getattr(args, "skills_scope", "global"),
             share_savings=getattr(args, "share_savings", None),
+            minimal=getattr(args, "minimal", False),
         ))
 
     if args.command == "install-status":
@@ -7029,6 +7110,62 @@ def main(argv: Optional[list[str]] = None):
             no_backup=getattr(args, "no_backup", False),
             yes=getattr(args, "yes", False),
         ))
+
+    if args.command == "keyring":
+        from . import credentials as _creds
+        import getpass as _getpass
+
+        action = getattr(args, "keyring_action", None)
+        if action is None:
+            print("keyring: please pass a subcommand (set/get/delete/list)", file=sys.stderr)
+            sys.exit(2)
+        try:
+            if action == "set":
+                name = args.name
+                if getattr(args, "from_env", False):
+                    value = os.environ.get(name, "")
+                    if not value:
+                        print(f"keyring set: env var {name} is empty or unset", file=sys.stderr)
+                        sys.exit(2)
+                else:
+                    value = _getpass.getpass(f"Enter value for {name}: ")
+                if not value:
+                    print(f"keyring set: empty value, aborted", file=sys.stderr)
+                    sys.exit(2)
+                _creds.keyring_set(name, value)
+                print(f"Stored {name} in system keyring under service '{_creds.SERVICE_NAME}'.")
+                print(f"To use it, set: {name}=keyring:{name}  (in your MCP env block)")
+                sys.exit(0)
+            elif action == "get":
+                value = _creds.keyring_get(args.name)
+                if value is None:
+                    print(f"No keyring entry for {args.name} under service '{_creds.SERVICE_NAME}'.")
+                    sys.exit(1)
+                print(value)
+                sys.exit(0)
+            elif action == "delete":
+                removed = _creds.keyring_delete(args.name)
+                if removed:
+                    print(f"Removed {args.name} from system keyring.")
+                else:
+                    print(f"No keyring entry for {args.name} to remove (or removal failed).")
+                sys.exit(0 if removed else 1)
+            elif action == "list":
+                print("Recognised credential env-var names (set any to keyring:<name> to enable keyring resolution):")
+                for var in _creds.list_recognised_env_vars():
+                    populated = _creds.keyring_get(var)
+                    state = "stored" if populated else "not set"
+                    print(f"  {var:<30}  {state}")
+                sys.exit(0)
+            else:
+                print(f"keyring: unknown subcommand '{action}'", file=sys.stderr)
+                sys.exit(2)
+        except ImportError as e:
+            print(f"keyring: {e}", file=sys.stderr)
+            sys.exit(1)
+        except Exception as e:
+            print(f"keyring {action} failed: {e}", file=sys.stderr)
+            sys.exit(1)
 
     if args.command == "download-model":
         from .embeddings.local_encoder import download_model as _download_model

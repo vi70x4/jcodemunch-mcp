@@ -86,6 +86,43 @@ Binary files are excluded using a two-stage check:
 
 ---
 
+## Release artifact signing
+
+GitHub release artifacts (wheel + sdist) are signed with
+[sigstore-python](https://github.com/sigstore/sigstore-python) via a
+GitHub Actions workflow (`.github/workflows/sign-release.yml`) triggered
+on `release.published`. The workflow uses GitHub's OIDC identity as the
+signer, so verification ties an artifact back to the specific workflow
+in this repository that signed it — no long-lived signing keys, no
+external trust roots beyond the Sigstore public-good infrastructure.
+
+**Verifying a release:**
+
+```bash
+TAG=v1.108.22  # or whichever release you want to verify
+WHEEL=jcodemunch_mcp-${TAG#v}-py3-none-any.whl
+BASE="https://github.com/jgravelle/jcodemunch-mcp/releases/download/${TAG}"
+
+curl -L -o "${WHEEL}" "${BASE}/${WHEEL}"
+curl -L -o "${WHEEL}.sigstore" "${BASE}/${WHEEL}.sigstore"
+
+python -m pip install sigstore
+python -m sigstore verify github \
+    --bundle "${WHEEL}.sigstore" \
+    --repository jgravelle/jcodemunch-mcp \
+    --workflow-name "Sign release artifacts" \
+    "${WHEEL}"
+```
+
+The trust shape is the same one PyPI's PEP 740 attestation pipeline uses:
+the workflow runs in GitHub Actions, presents an OIDC identity claim to
+Sigstore's transparency log, and the signature is recoverable from the
+log via the bundle. Forward-only — releases prior to the signing
+workflow's introduction don't carry signatures and aren't going to be
+retroactively resigned.
+
+---
+
 ## Files this server treats as security-sensitive
 
 The following user-writable files participate in the server's trust chain. A
@@ -161,11 +198,22 @@ a coherent tamper of `~/.code-index/<repo>/` is durably trusted after
 the tamper. Treat the cache directory accordingly — see the security-sensitive
 files section above for why it's worth file-integrity monitoring.
 
-Externally-attested verification (cross-check against the working-tree git
-HEAD) is on the near-term roadmap and will surface as a `verify_against`
-parameter alongside the existing `verify` flag. Until then, the default
-mode is best read as "the cache is internally consistent," not "the cache
-matches the upstream source."
+Externally-attested verification is available via the
+`verify_against="git_sha"` parameter on `get_symbol_source`: when set, the
+cached source is compared against the working-tree git HEAD slice of the
+same file, not against the cache's own stored hash. The response includes
+a `git_sha_verification` field with one of:
+
+- `git_sha_match` — the cached source matches the HEAD slice.
+- `git_sha_mismatch` — the file exists in HEAD but the slice differs.
+- `git_unavailable` — the file isn't in HEAD, git is unreachable, or the
+  source isn't a git working tree.
+
+Default remains `verify_against="cache"` for back-compat. For
+managed-endpoint or supply-chain-conscious deployments where cache
+integrity matters, the `git_sha` mode is the externally-attested signal;
+the `cache` mode alone is best read as "the cache is internally
+consistent," not "the cache matches the upstream source."
 
 ---
 

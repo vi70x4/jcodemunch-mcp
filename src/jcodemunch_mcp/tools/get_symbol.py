@@ -2,7 +2,9 @@
 
 import hashlib
 import os
+import subprocess
 import time
+from pathlib import Path
 from typing import Optional
 
 from ..storage import IndexStore, record_savings, estimate_savings, cost_avoided as _cost_avoided
@@ -16,6 +18,62 @@ def _make_meta(timing_ms: float, **kwargs) -> dict:
     return meta
 
 
+def _verify_against_git_sha(
+    cached_source: str,
+    source_root: Optional[str],
+    file_path: str,
+    line: int,
+    end_line: int,
+) -> str:
+    """Compare cached source against the working-tree git HEAD content (P1.6).
+
+    Returns one of:
+    - ``"git_sha_match"``      — the cached source matches the HEAD slice
+                                  of the same file (lines line..end_line).
+    - ``"git_sha_mismatch"``   — the file exists in HEAD but the slice differs.
+    - ``"git_unavailable"``    — source_root unknown, file isn't tracked in
+                                  HEAD, or git is unreachable from this env.
+
+    This is an externally-attested verification mode: the comparison target
+    comes from git, not from the same cache the symbol's content_hash was
+    derived from. The default ``verify_against="cache"`` mode is self-referential
+    and only catches incoherent tamper of ``~/.code-index/<repo>/``; this mode
+    catches divergence between the cache and the upstream source.
+    """
+    if not source_root or not file_path:
+        return "git_unavailable"
+    root = Path(source_root)
+    if not (root / ".git").exists() and not (root / ".git").is_file():
+        # Not a git working tree (or worktree pointing elsewhere; bail rather
+        # than guess).
+        return "git_unavailable"
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "show", f"HEAD:{file_path}"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return "git_unavailable"
+    if result.returncode != 0:
+        # File not in HEAD (untracked, new file, deleted from HEAD, etc.)
+        return "git_unavailable"
+    head_content = result.stdout
+    if not head_content:
+        return "git_unavailable"
+    head_lines = head_content.split("\n")
+    if line < 1 or end_line < line or end_line > len(head_lines):
+        # Symbol line range no longer falls within the HEAD file shape; treat
+        # as divergence rather than match.
+        return "git_sha_mismatch"
+    head_slice = "\n".join(head_lines[line - 1:end_line])
+    cached_slice = cached_source.rstrip("\n")
+    head_slice = head_slice.rstrip("\n")
+    return "git_sha_match" if head_slice == cached_slice else "git_sha_mismatch"
+
+
 def get_symbol_source(
     repo: str,
     symbol_id: Optional[str] = None,
@@ -24,6 +82,7 @@ def get_symbol_source(
     context_lines: int = 0,
     storage_path: Optional[str] = None,
     fqn: Optional[str] = None,
+    verify_against: str = "cache",
 ) -> dict:
     """Get full source of one or more symbols by ID.
 
@@ -110,6 +169,16 @@ def get_symbol_source(
             "content_hash": symbol.get("content_hash", ""),
             "source": source or "",
         }
+        # P1.4: distinguish "empty source" from "no body cached because we're
+        # in metadata_only mode" so downstream agents don't treat the empty
+        # string as the symbol's actual source.
+        if not source:
+            try:
+                from .. import config as _cfg
+                if _cfg.get("cache_mode", "full") == "metadata_only":
+                    entry["source_status"] = "metadata_only_mode"
+            except Exception:
+                pass
         if context_before:
             entry["context_before"] = context_before
         if context_after:
@@ -119,6 +188,17 @@ def get_symbol_source(
             actual_hash = hashlib.sha256(source.encode("utf-8")).hexdigest()
             stored_hash = symbol.get("content_hash", "")
             entry["content_verified"] = actual_hash == stored_hash if stored_hash else None
+            # P1.6: externally-attested mode compares cached source against the
+            # working-tree git HEAD slice of the same file. Surfaced alongside
+            # the cache-only verification so callers can see both signals.
+            if verify_against == "git_sha":
+                entry["git_sha_verification"] = _verify_against_git_sha(
+                    cached_source=source,
+                    source_root=getattr(index, "source_root", None),
+                    file_path=symbol["file"],
+                    line=symbol["line"],
+                    end_line=symbol["end_line"],
+                )
 
         symbols_out.append(entry)
 

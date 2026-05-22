@@ -2027,7 +2027,18 @@ class SQLiteIndexStore:
             return None
 
     def _write_cached_text(self, path: Path, content: str) -> None:
-        """Write cached text without newline translation."""
+        """Write cached text without newline translation.
+
+        Honors ``cache_mode`` config: when set to ``"metadata_only"``, source
+        bodies are not persisted to disk. The symbol table still gets
+        populated normally; only the ``bodies/`` directory stays empty. P1.4.
+        """
+        try:
+            from .. import config as _cfg
+            if _cfg.get("cache_mode", "full") == "metadata_only":
+                return  # skip body persistence; symbol table still written
+        except Exception:
+            pass  # config unavailable, fall through to default full-cache behavior
         with open(path, "w", encoding="utf-8", newline="") as f:
             f.write(content)
 

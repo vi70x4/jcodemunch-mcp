@@ -396,6 +396,78 @@ Every `JCODEMUNCH_*` env var maps to a config key:
 
 Env vars continue to work as fallback (they fill in keys not set in the config file) and emit a one-time deprecation warning per variable. They will be removed in v2.0.
 
+## Keyring-loaded credentials
+
+Every credential env var the server recognises can be loaded from the system
+keyring (macOS Keychain, Windows Credential Manager, freedesktop Secret
+Service on Linux, or any other backend the `keyring` Python package
+supports). This keeps secrets out of inline JSON files and shell history.
+
+**Install:** `pip install "jcodemunch-mcp[keyring]"`
+
+**Store a secret:**
+
+```bash
+jcodemunch-mcp keyring set ANTHROPIC_API_KEY
+# (prompts for the value via getpass — never echoed)
+
+# Or pull from an existing env var rather than prompting:
+ANTHROPIC_API_KEY=sk-ant-... jcodemunch-mcp keyring set ANTHROPIC_API_KEY --from-env
+```
+
+**Reference it from your MCP config** by setting the env var's value to
+`keyring:<name>`:
+
+```json
+{
+  "mcpServers": {
+    "jcodemunch": {
+      "command": "uvx",
+      "args": ["jcodemunch-mcp"],
+      "env": {
+        "ANTHROPIC_API_KEY": "keyring:ANTHROPIC_API_KEY"
+      }
+    }
+  }
+}
+```
+
+At server startup, `jcodemunch-mcp` rewrites any value matching the
+`keyring:<name>` pattern to the secret stored under that name in the system
+keyring. Downstream code reads the resolved value via the usual
+`os.environ.get(...)` path — no per-tool changes required.
+
+**Verify resolution** with `jcodemunch-mcp config --check`: the output gains
+a "Keyring resolution" section listing every env var that was successfully
+resolved from the keyring, so you can confirm the chokepoint is firing
+without having to inspect the actual secret values.
+
+**Fail-closed semantics.** If the named keyring entry doesn't exist, or if
+the keyring backend is unavailable, the env var stays at the literal
+`keyring:<name>` string rather than getting replaced with an empty string.
+Downstream HTTP calls fail with "invalid token" instead of silently sending
+an unauthenticated request.
+
+**Recognised credential env vars:**
+
+`GITHUB_TOKEN`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `OPENAI_API_KEY`,
+`OPENAI_API_BASE`, `MINIMAX_API_KEY`, `ZHIPUAI_API_KEY`, `OPENROUTER_API_KEY`,
+`GROQ_API_KEY`, `JCODEMUNCH_HTTP_TOKEN`.
+
+**Keyring management commands:**
+
+```bash
+jcodemunch-mcp keyring set <name>        # store (prompts for value)
+jcodemunch-mcp keyring get <name>        # print stored value to stdout
+jcodemunch-mcp keyring delete <name>     # remove from keyring
+jcodemunch-mcp keyring list              # list recognised names + storage state
+```
+
+For enterprise / managed-endpoint deployments the recommended pattern is to
+provision the secrets out-of-band (via your existing secret manager) and
+reference them via `keyring:` from a checked-in MCP config file, so the
+actual secret never appears in source control or process listings.
+
 ## Not in config
 
 These environment variables are **not** config keys and remain env-var only:

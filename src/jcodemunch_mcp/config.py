@@ -395,6 +395,8 @@ DEFAULTS = {
     "path_map": "",
     "cross_repo_default": False,
     "discovery_hint": True,
+    "cache_mode": "full",
+    "summarize_from_docstrings": True,
     # Session-aware routing (Feature 6)
     "negative_evidence_threshold": 0.5,
     "search_result_cache_max": 128,
@@ -480,6 +482,8 @@ CONFIG_TYPES = {
     "path_map": str,
     "cross_repo_default": bool,
     "discovery_hint": bool,
+    "cache_mode": str,
+    "summarize_from_docstrings": bool,
     "version": str,
     "architecture": dict,
     # Session-aware routing
@@ -1726,6 +1730,37 @@ def generate_template() -> str:
   //   history those bounds may still not be enough — set false to
   //   skip the probe entirely. Index still builds; only the blame
   //   metadata is omitted.
+
+  // === Summarization input policy ===
+  // "summarize_from_docstrings": true,
+  //   Controls the Tier 1 summarizer (docstring-first-sentence extraction).
+  //     true  - Default. Extract a one-line summary from each symbol's
+  //             docstring when present. Zero token cost.
+  //     false - Skip Tier 1 entirely. Summaries fall through to Tier 2
+  //             (AI summary, if configured) and then Tier 3 (signature
+  //             fallback). Recommended for security-conscious deployments
+  //             that want to eliminate the indirect-prompt-injection
+  //             surface docstring-derived summaries introduce. The host
+  //             agent's tool-output handling remains the primary IPI
+  //             control; this flag closes the docstring channel as a
+  //             defense-in-depth measure.
+
+  // === Cache shape ===
+  // "cache_mode": "full",
+  //   Controls what jcodemunch persists to ~/.code-index/<repo>/ on disk.
+  //     full          - Default. Symbol table + cached file bodies + outlines.
+  //                     Required for get_symbol_source and get_file_content.
+  //     metadata_only - Symbol table + outlines only. File bodies are extracted
+  //                     in memory during indexing and discarded; no bodies/
+  //                     directory is written. get_symbol_source and
+  //                     get_file_content return a "metadata_only_mode" error
+  //                     when invoked. All other tools (search_symbols,
+  //                     find_references, get_file_outline, etc.) work
+  //                     normally because they don't need bodies.
+  //   Set metadata_only when policy disallows a second on-disk copy of source
+  //   (managed-endpoint deployments where ~/.code-index/ would otherwise be
+  //   covered by Time Machine / iCloud / OneDrive sync that the canonical
+  //   clone is excluded from).
 
   // === Privacy & Telemetry ===
   // "redact_source_root": false,

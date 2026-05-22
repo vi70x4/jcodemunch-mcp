@@ -1,0 +1,90 @@
+name: Sign release artifacts
+
+# Signs the wheel + sdist attached to a GitHub release with sigstore-python,
+# then uploads the .sigstore bundles back to the same release as additional
+# assets. Triggered automatically on `release.published` so the maintainer's
+# existing `gh release create` flow gains forward-only signature coverage
+# without changing the upload pattern.
+#
+# Verification by a downstream consumer:
+#
+#     curl -L -o jcodemunch_mcp-X.Y.Z-py3-none-any.whl \
+#         https://github.com/jgravelle/jcodemunch-mcp/releases/download/vX.Y.Z/jcodemunch_mcp-X.Y.Z-py3-none-any.whl
+#     curl -L -o jcodemunch_mcp-X.Y.Z-py3-none-any.whl.sigstore \
+#         https://github.com/jgravelle/jcodemunch-mcp/releases/download/vX.Y.Z/jcodemunch_mcp-X.Y.Z-py3-none-any.whl.sigstore
+#     python -m pip install sigstore
+#     python -m sigstore verify github \
+#         --bundle jcodemunch_mcp-X.Y.Z-py3-none-any.whl.sigstore \
+#         --repository jgravelle/jcodemunch-mcp \
+#         --workflow-name "Sign release artifacts" \
+#         jcodemunch_mcp-X.Y.Z-py3-none-any.whl
+#
+# The verification ties the artifact back to the GitHub Actions OIDC identity
+# of this workflow file in this repository — same trust shape PyPI's PEP 740
+# attestation pipeline uses.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  id-token: write     # required for sigstore OIDC
+  contents: write     # required to upload signature bundles back to the release
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download release artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          mkdir -p artifacts
+          cd artifacts
+          # Fetch every asset on this release. The `gh release download`
+          # default pattern matches all assets; we filter to wheel + sdist
+          # so we don't try to sign anything already signed (.sigstore files
+          # uploaded by a prior run get re-uploaded otherwise).
+          gh release download "$RELEASE_TAG" \
+              --repo "${{ github.repository }}" \
+              --pattern '*.whl' \
+              --pattern '*.tar.gz' \
+              --skip-existing
+          ls -la
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Sign artifacts
+        uses: sigstore/gh-action-sigstore-python@v3
+        with:
+          inputs: |
+            ./artifacts/*.whl
+            ./artifacts/*.tar.gz
+          upload-signing-artifacts: false  # we upload to the GitHub release ourselves
+
+      - name: Upload signature bundles to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          cd artifacts
+          # The sigstore action writes .sigstore files alongside the inputs.
+          # Upload only those (the wheel/sdist are already on the release).
+          if ls *.sigstore 1> /dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" *.sigstore \
+                --repo "${{ github.repository }}" \
+                --clobber
+            echo "Uploaded $(ls *.sigstore | wc -l) signature bundles to release $RELEASE_TAG"
+          else
+            echo "No .sigstore files produced — nothing to upload."
+            exit 1
+          fi

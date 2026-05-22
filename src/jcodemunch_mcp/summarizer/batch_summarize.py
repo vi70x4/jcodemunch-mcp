@@ -703,17 +703,37 @@ def _make_openai_compat(
     return OpenAIBatchSummarizer(model=model, api_base=base_url, api_key=api_key, repo=repo)
 
 
+def _docstring_summaries_enabled(repo: Optional[str] = None) -> bool:
+    """Return True if the docstring-extraction tier is enabled (P1.5).
+
+    Defaults to True for back-compat. When set to False via the
+    ``summarize_from_docstrings`` config key, the docstring-extraction tier
+    is skipped entirely and summaries fall through to AI summarization (if
+    configured) or to the signature_fallback. Recommended for security-conscious
+    deployments that want to eliminate the indirect-prompt-injection surface
+    that docstring-extracted content introduces (F-04).
+    """
+    try:
+        from .. import config as _cfg
+        return bool(_cfg.get("summarize_from_docstrings", True, repo=repo))
+    except Exception:
+        return True  # config unavailable, preserve default behavior
+
+
 def summarize_symbols_simple(symbols: list[Symbol]) -> list[Symbol]:
     """Tier 1 + Tier 3: Docstring extraction + signature fallback.
 
-    No AI required. Fast and deterministic.
+    No AI required. Fast and deterministic. Docstring tier honors the
+    ``summarize_from_docstrings`` config key (P1.5); when disabled, symbols
+    without an existing summary fall straight through to signature_fallback.
     """
+    use_docstrings = _docstring_summaries_enabled()
     for sym in symbols:
         if sym.summary:
             continue
 
-        # Try docstring
-        if sym.docstring:
+        # Try docstring (gated by P1.5 config)
+        if use_docstrings and sym.docstring:
             sym.summary = extract_summary_from_docstring(sym.docstring)
 
         # Fall back to signature
@@ -749,10 +769,11 @@ def summarize_symbols(
     honored at runtime (#304). Defaults to None for callers that don't have
     a repo context, preserving the global-only behavior.
     """
-    # Tier 1: Extract from docstrings
-    for sym in symbols:
-        if sym.docstring and not sym.summary:
-            sym.summary = extract_summary_from_docstring(sym.docstring)
+    # Tier 1: Extract from docstrings (gated by summarize_from_docstrings, P1.5)
+    if _docstring_summaries_enabled(repo=repo):
+        for sym in symbols:
+            if sym.docstring and not sym.summary:
+                sym.summary = extract_summary_from_docstring(sym.docstring)
 
     # Tier 2: AI summarization for remaining symbols
     if use_ai:

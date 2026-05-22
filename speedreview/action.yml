@@ -38,7 +38,7 @@ inputs:
       Override only if you have a specific reason and have validated the
       replacement against your workflow.
     required: false
-    default: "==1.108.21"
+    default: "==1.108.22"
   openai_version:
     description: >-
       PyPI version specifier for the openai SDK. Constraint-form default

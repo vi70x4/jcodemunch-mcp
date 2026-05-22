@@ -54,14 +54,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: jgravelle/jcodemunch-mcp/speedreview@v1.108.21
+      - uses: jgravelle/jcodemunch-mcp/speedreview@v1.108.22
         with:
           groq_api_key: ${{ secrets.GROQ_API_KEY }}
 ```
 
 ### Pinning for production
 
-The example above pins the action to a specific package release tag (`@v1.108.21`),
+The example above pins the action to a specific package release tag (`@v1.108.22`),
 which is the recommended baseline. For workflows under stricter supply-chain
 review, pin to the commit SHA the tag points to instead:
 
@@ -71,7 +71,7 @@ review, pin to the commit SHA the tag points to instead:
           groq_api_key: ${{ secrets.GROQ_API_KEY }}
 ```
 
-Resolve the SHA with `git ls-remote https://github.com/jgravelle/jcodemunch-mcp refs/tags/v1.108.21`.
+Resolve the SHA with `git ls-remote https://github.com/jgravelle/jcodemunch-mcp refs/tags/v1.108.22`.
 
 SHA pinning makes the consumed action immutable: if a tag is ever moved or a
 breaking change ships on `main`, the workflow keeps running the same code
@@ -93,7 +93,7 @@ requires a different pin.
 | `max_comment_length` | `4000` | Maximum PR comment length in characters |
 | `token_budget` | `8000` | Token budget for jCodeMunch context retrieval |
 | `base_ref` | *(auto-detect)* | Base ref to diff against |
-| `jcodemunch_version` | `==1.108.21` | PyPI version specifier for jcodemunch-mcp |
+| `jcodemunch_version` | `==1.108.22` | PyPI version specifier for jcodemunch-mcp |
 | `openai_version` | `>=1.50,<2` | PyPI version specifier for the openai SDK |
 
 ### Model options

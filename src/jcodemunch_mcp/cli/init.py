@@ -930,6 +930,7 @@ def run_init(
     skills: bool = False,
     skills_scope: str = "global",
     share_savings: Optional[str] = None,
+    minimal: bool = False,
 ) -> int:
     """Run the init flow. Returns exit code (0 = success).
 
@@ -937,11 +938,33 @@ def run_init(
     When set, writes the explicit value into ``~/.code-index/config.jsonc`` before
     any other init step runs, so the user's preference survives even if the rest
     of init is aborted partway through.
+
+    ``minimal`` (P1.7): when True, writes only the MCP server registration for the
+    targeted clients and skips every other channel — no CLAUDE.md policy paste,
+    no Cursor / Windsurf rules, no AGENTS.md, no enforcement hooks, no
+    .github/hooks. Equivalent to the user answering "skip / no" to every prompt
+    after MCP client selection. Recommended for hardened install templates that
+    don't want jcodemunch touching agent-policy files outside their existing
+    source-controlled posture.
     """
     if demo:
         dry_run = True  # demo never writes anything
     backup = not no_backup
     interactive = not yes and sys.stdin.isatty()
+    # P1.7: --minimal forces all channels beyond MCP server registration to
+    # OFF and turns off interactive prompts. Combined with --yes (which is
+    # how `install <agent>` calls into run_init) this becomes a clean
+    # "register MCP server, do nothing else" path. Suitable for hardened
+    # install templates that don't want jcodemunch touching agent-policy
+    # files outside their existing source-controlled posture.
+    if minimal:
+        interactive = False
+        claude_md = "skip"
+        hooks = False
+        copilot_hooks = False
+        index = False
+        audit = False
+        skills = False
 
     if demo:
         print("\njCodeMunch init -- DEMO MODE (no changes will be made)\n")
@@ -1032,7 +1055,7 @@ def run_init(
             ))
 
     # 2b: Cursor rules (.cursor/rules/jcodemunch.mdc)
-    if "Cursor" in selected_names:
+    if "Cursor" in selected_names and not minimal:
         do_cursor_rules = yes or not interactive
         if interactive:
             print()
@@ -1049,7 +1072,7 @@ def run_init(
                 ))
 
     # 2c: Windsurf rules (.windsurfrules)
-    if "Windsurf" in selected_names:
+    if "Windsurf" in selected_names and not minimal:
         do_windsurf_rules = yes or not interactive
         if interactive:
             print()
@@ -1066,7 +1089,7 @@ def run_init(
                 ))
 
     # 2d: AGENTS.md (OpenCode, Codex, etc.)
-    do_agents_md = yes or not interactive
+    do_agents_md = (yes or not interactive) and not minimal
     if interactive:
         print()
         do_agents_md = _prompt_yn(
@@ -1117,8 +1140,8 @@ def run_init(
             "Install enforcement hooks (intercept Read on large code files, auto-reindex after Edit/Write)?",
             default=True,
         )
-    elif not do_enforce and yes:
-        do_enforce = True  # default for --yes mode
+    elif not do_enforce and yes and not minimal:
+        do_enforce = True  # default for --yes mode (suppressed under --minimal)
     if do_enforce:
         msg = install_enforcement_hooks(dry_run=dry_run, backup=backup)
         print(f"  Enforcement:{msg}")
@@ -1165,8 +1188,8 @@ def run_init(
     if not do_audit and interactive:
         print()
         do_audit = _prompt_yn("Audit agent config files for token waste?", default=True)
-    elif not do_audit and yes:
-        do_audit = True  # default for --yes mode
+    elif not do_audit and yes and not minimal:
+        do_audit = True  # default for --yes mode (suppressed under --minimal)
 
     if do_audit:
         print()

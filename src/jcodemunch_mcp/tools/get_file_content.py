@@ -32,6 +32,26 @@ def get_file_content(
 
     content = store.get_file_content(owner, name, file_path, _index=index)
     if content is None:
+        # Distinguish "no body cached because we're in metadata-only mode"
+        # from "indexed file but cache is missing for some other reason."
+        # P1.4: when cache_mode == metadata_only, get_file_content is a
+        # documented no-op rather than a surprise cache miss.
+        try:
+            from .. import config as _cfg
+            if _cfg.get("cache_mode", "full") == "metadata_only":
+                return {
+                    "error": "metadata_only_mode",
+                    "detail": (
+                        "cache_mode=metadata_only — source bodies are not "
+                        "persisted to disk under this config. Re-index with "
+                        "cache_mode=full to populate file content, or use "
+                        "tools that don't require bodies (search_symbols, "
+                        "get_file_outline, find_references)."
+                    ),
+                    "file": file_path,
+                }
+        except Exception:
+            pass
         return {"error": f"File content not found: {file_path}"}
 
     lines = content.splitlines()
