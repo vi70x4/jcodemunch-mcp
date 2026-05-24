@@ -296,21 +296,19 @@ Add to `.vscode/settings.json`:
 
 ## Google Antigravity
 
-> [!WARNING]
-> **Setup steps below are stale as of May 2026.** Antigravity revamped the desktop app UI and removed the `⋯` → MCP Servers → Manage MCP Servers → View raw config flow that these steps rely on. The new UI only exposes per-MCP permissions, not raw-config editing. The integration model also appears to have moved from free-form `mcpServers` JSON to an agent-skills model (`agy --ai-skills` for the CLI, equivalent to Claude Code's `~/.claude/skills/`). Tracking at [issue #307](https://github.com/jgravelle/jcodemunch-mcp/issues/307); will update once the current skill-bundle procedure is confirmed.
-
-1. Open the Agent pane
-2. Click the `⋯` menu
-3. Choose **MCP Servers** → **Manage MCP Servers**
-4. Open **View raw config**
-5. Add:
+Antigravity's `agy` CLI inherits Gemini-CLI's config shape. Edit
+`~/.gemini/config/mcp_config.json` and add the `jcodemunch` entry:
 
 ```json
 {
   "mcpServers": {
     "jcodemunch": {
       "command": "uvx",
-      "args": ["jcodemunch-mcp"],
+      "args": [
+        "--from",
+        "https://github.com/jgravelle/jcodemunch-mcp/releases/download/v1.108.23/jcodemunch_mcp-1.108.23-py3-none-any.whl",
+        "jcodemunch-mcp"
+      ],
       "env": {
         "GITHUB_TOKEN": "ghp_...",
         "ANTHROPIC_API_KEY": "sk-ant-..."
@@ -320,7 +318,19 @@ Add to `.vscode/settings.json`:
 }
 ```
 
-Restart the MCP server afterward.
+On first `/mcp` load inside `agy`, the CLI caches each tool schema at
+`~/.gemini/antigravity-cli/mcp/jcodemunch/<tool>.json`. Permissions live in
+`~/.gemini/antigravity-cli/settings.json` as
+`"permissions": { "allow": [ "mcp(jcodemunch/*)" ] }`. Restart `agy` after
+editing the config.
+
+The `https://github.com/.../v1.108.23/...whl` URL is the temporary
+PyPI-quarantine workaround (see the banner at the top of README.md).
+Once the quarantine clears, swap the args back to `["jcodemunch-mcp"]`.
+
+If you already have jcodemunch configured for Claude Code or Gemini CLI,
+`agy plugin import claude` (or `import gemini`) can pull the existing
+config across without re-editing JSON.
 
 ---
 

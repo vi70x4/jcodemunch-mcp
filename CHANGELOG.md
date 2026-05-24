@@ -4,6 +4,13 @@ All notable changes to jcodemunch-mcp are documented here.
 
 ## [Unreleased]
 
+## [1.108.23] - 2026-05-24 - Astro (.astro) language support
+
+Adds full parsing support for `.astro` files (Astro v6), bringing the language
+count to 74. Mixed-language components (TypeScript frontmatter, HTML template,
+`<script>`/`<style>` blocks) follow the existing Razor recursive-delegation
+strategy. PR #311 by @gokhanozdemir.
+
 ### Astro parser/import hardening
 
 - Astro frontmatter parsing now handles UTF-8 BOM, CRLF, and malformed fences
