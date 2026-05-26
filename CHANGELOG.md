@@ -4,6 +4,21 @@ All notable changes to jcodemunch-mcp are documented here.
 
 ## [Unreleased]
 
+## [1.108.24] - 2026-05-26 - check_edit_safe edit-safety preflight
+
+New tool `check_edit_safe`: the edit-safety companion to `check_delete_safe`.
+Where delete-safety asks "who breaks if this disappears," edit-safety asks
+"what's my regression risk if I modify it, and what must I preserve." It fuses
+signature impact (external/cross-repo importers that depend on the current
+contract), cyclomatic complexity, test-coverage presence, and runtime traffic
+into a single verdict + one-line recommended_action. Verdict tiers:
+`safe_to_edit` / `untested` / `complexity_risk` / `signature_impact` /
+`runtime_critical`. Read-only; never mutates the codebase. Reuses the canonical
+`check_delete_safe` signal helpers rather than duplicating them. Tool count 82.
+
+Also: dropped the dead `_HTML_COMMENT_RE` in `imports.py` (unused since the
+v1.108.23 Astro work moved comment masking into `astro_shared`).
+
 ## [1.108.23] - 2026-05-24 - Astro (.astro) language support
 
 Adds full parsing support for `.astro` files (Astro v6), bringing the language
